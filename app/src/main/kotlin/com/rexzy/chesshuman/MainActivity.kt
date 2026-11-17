@@ -1,5 +1,7 @@
 package com.rexzy.chesshuman
 
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -14,9 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.github.bhlangonijr.chesslib.Board
@@ -36,6 +37,13 @@ class MainActivity : ComponentActivity() {
 }
 
 const val START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+val PIECE_TO_CHAR = mapOf(
+    'r' to "\u265C", 'n' to "\u265E", 'b' to "\u265D",
+    'q' to "\u265B", 'k' to "\u265A", 'p' to "\u265F",
+    'R' to "\u2656", 'N' to "\u2658", 'B' to "\u2657",
+    'Q' to "\u2655", 'K' to "\u2654", 'P' to "\u2659"
+)
 
 fun fenToBoard(fen: String): Array<CharArray> {
     val board = Array(8) { CharArray(8) { ' ' } }
@@ -63,7 +71,7 @@ fun GameScreen() {
     fun refreshLegal(from: Pair<Int, Int>?) {
         if (from == null) { legalTargets = emptyList(); return }
         val (r, c) = from
-        val fromSquare = Square.valueOf(squareName(r, c))
+        val fromSquare = try { Square.valueOf(squareName(r, c)) } catch (e: Exception) { return }
         val moves = try {
             MoveGenerator.generateLegalMoves(board).filter { it.from == fromSquare }
         } catch (e: Exception) { emptyList() }
@@ -74,14 +82,19 @@ fun GameScreen() {
     }
 
     fun attemptMove(from: Pair<Int, Int>, to: Pair<Int, Int>) {
-        val fromSq = Square.valueOf(squareName(from.first, from.second))
-        val toSq = Square.valueOf(squareName(to.first, to.second))
-        val candidate = board.legalMoves().firstOrNull { it.from == fromSq && it.to == toSq } ?: return
-        val fenBefore = board.fen
-        board.doMove(candidate)
-        history = history + HistoryEntry(fenBefore, candidate.toString())
-        selected = null
-        legalTargets = emptyList()
+        try {
+            val fromSq = Square.valueOf(squareName(from.first, from.second))
+            val toSq = Square.valueOf(squareName(to.first, to.second))
+            val candidate = board.legalMoves().firstOrNull { it.from == fromSq && it.to == toSq } ?: return
+            val fenBefore = board.fen
+            board.doMove(candidate)
+            history = history + HistoryEntry(fenBefore, candidate.toString())
+        } catch (e: Exception) {
+            // abaikan langkah tidak valid, jangan crash
+        } finally {
+            selected = null
+            legalTargets = emptyList()
+        }
     }
 
     Column(
@@ -135,7 +148,8 @@ fun GameScreen() {
 }
 
 fun squareName(r: Int, c: Int): String {
-    return "${('a' + c)}${8 - r}"
+    // chesslib pakai HURUF BESAR: E2, bukan e2
+    return "${('A' + c)}${8 - r}"
 }
 
 @Composable
@@ -168,6 +182,12 @@ fun ChessBoard(
     ) {
         boardSize = size
         val cell = size.width / 8f
+        val paint = Paint().apply {
+            textSize = cell * 0.78f
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT
+            isAntiAlias = true
+        }
 
         for (sr in 0..7) for (sc in 0..7) {
             val (r, c) = if (flipped) (7 - sr) to (7 - sc) else sr to sc
@@ -182,138 +202,32 @@ fun ChessBoard(
             val (r, c) = if (flipped) (7 - sr) to (7 - sc) else sr to sc
             val piece = board[r][c]
             if (piece != ' ') {
-                drawChessPiece(piece, Offset(sc * cell + cell / 2f, sr * cell + cell / 2f), cell * 0.85f)
+                val glyph = PIECE_TO_CHAR[piece] ?: continue
+                val isWhite = piece.isUpperCase()
+
+                // Trik: gambar glyph dengan STROKE tebal dulu (outline),
+                // lalu FILL solid di atasnya. Glyph putih pun jadi punya isi.
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = cell * 0.06f
+                paint.color = if (isWhite) 0xFF000000.toInt() else 0xFF888888.toInt()
+
+                drawIntoCanvas { canvas ->
+                    val native = canvas.nativeCanvas
+                    val x = sc * cell + cell / 2f
+                    val y = sr * cell + cell / 2f - (paint.ascent() + paint.descent()) / 2f
+                    native.drawText(glyph, x, y, paint)
+                }
+
+                paint.style = Paint.Style.FILL
+                paint.color = if (isWhite) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()
+
+                drawIntoCanvas { canvas ->
+                    val native = canvas.nativeCanvas
+                    val x = sc * cell + cell / 2f
+                    val y = sr * cell + cell / 2f - (paint.ascent() + paint.descent()) / 2f
+                    native.drawText(glyph, x, y, paint)
+                }
             }
         }
     }
-}
-
-fun DrawScope.drawChessPiece(piece: Char, center: Offset, size: Float) {
-    val isWhite = piece.isUpperCase()
-    val fill = if (isWhite) Color(0xFFFFFFFF) else Color(0xFF000000)
-    val outline = if (isWhite) Color(0xFF000000) else Color(0xFF666666)
-    val strokeW = size * 0.04f
-    val h = size
-    val w = size
-    val cx = center.x
-    val cy = center.y
-
-    val body = Path().apply {
-        when (piece.lowercaseChar()) {
-            'p' -> {
-                // Bola atas
-                addOval(androidx.compose.ui.geometry.Rect(
-                    cx - w * 0.18f, cy - h * 0.40f,
-                    cx + w * 0.18f, cy - h * 0.04f
-                ))
-                // Leher
-                moveTo(cx - w * 0.20f, cy - h * 0.05f)
-                lineTo(cx + w * 0.20f, cy - h * 0.05f)
-                lineTo(cx + w * 0.28f, cy + h * 0.15f)
-                lineTo(cx - w * 0.28f, cy + h * 0.15f)
-                close()
-                // Badan bawah
-                moveTo(cx - w * 0.35f, cy + h * 0.15f)
-                lineTo(cx + w * 0.35f, cy + h * 0.15f)
-                lineTo(cx + w * 0.40f, cy + h * 0.32f)
-                lineTo(cx - w * 0.40f, cy + h * 0.32f)
-                close()
-                // Alas
-                addRoundRect(androidx.compose.ui.geometry.RoundRect(
-                    left = cx - w * 0.42f, top = cy + h * 0.32f,
-                    right = cx + w * 0.42f, bottom = cy + h * 0.42f,
-                    radiusX = w * 0.05f, radiusY = h * 0.05f
-                ))
-            }
-            'r' -> {
-                // Menara: kotak dengan gigi
-                moveTo(cx - w * 0.30f, cy + h * 0.42f)
-                lineTo(cx - w * 0.25f, cy - h * 0.20f)
-                lineTo(cx - w * 0.25f, cy - h * 0.35f)
-                lineTo(cx - w * 0.15f, cy - h * 0.35f)
-                lineTo(cx - w * 0.15f, cy - h * 0.25f)
-                lineTo(cx - w * 0.05f, cy - h * 0.25f)
-                lineTo(cx - w * 0.05f, cy - h * 0.35f)
-                lineTo(cx + w * 0.05f, cy - h * 0.35f)
-                lineTo(cx + w * 0.05f, cy - h * 0.25f)
-                lineTo(cx + w * 0.15f, cy - h * 0.25f)
-                lineTo(cx + w * 0.15f, cy - h * 0.35f)
-                lineTo(cx + w * 0.25f, cy - h * 0.35f)
-                lineTo(cx + w * 0.25f, cy - h * 0.20f)
-                lineTo(cx + w * 0.30f, cy + h * 0.42f)
-                close()
-            }
-            'n' -> {
-                // Kuda: bentuk kepala
-                moveTo(cx - w * 0.30f, cy + h * 0.42f)
-                lineTo(cx - w * 0.30f, cy + h * 0.10f)
-                lineTo(cx - w * 0.15f, cy - h * 0.10f)
-                lineTo(cx - w * 0.35f, cy - h * 0.10f)
-                lineTo(cx - w * 0.25f, cy - h * 0.30f)
-                lineTo(cx - w * 0.05f, cy - h * 0.42f)
-                lineTo(cx + w * 0.15f, cy - h * 0.38f)
-                lineTo(cx + w * 0.30f, cy - h * 0.20f)
-                lineTo(cx + w * 0.30f, cy + h * 0.10f)
-                lineTo(cx + w * 0.30f, cy + h * 0.42f)
-                close()
-            }
-            'b' -> {
-                // Uskup: tetes + badan
-                addOval(androidx.compose.ui.geometry.Rect(
-                    cx - w * 0.08f, cy - h * 0.45f,
-                    cx + w * 0.08f, cy - h * 0.29f
-                ))
-                moveTo(cx, cy - h * 0.30f)
-                lineTo(cx + w * 0.25f, cy + h * 0.05f)
-                lineTo(cx + w * 0.20f, cy + h * 0.32f)
-                lineTo(cx - w * 0.20f, cy + h * 0.32f)
-                lineTo(cx - w * 0.25f, cy + h * 0.05f)
-                close()
-                addRoundRect(androidx.compose.ui.geometry.RoundRect(
-                    left = cx - w * 0.30f, top = cy + h * 0.32f,
-                    right = cx + w * 0.30f, bottom = cy + h * 0.42f,
-                    radiusX = w * 0.05f, radiusY = h * 0.05f
-                ))
-            }
-            'q' -> {
-                // Ratu: mahkota
-                moveTo(cx - w * 0.35f, cy + h * 0.42f)
-                lineTo(cx - w * 0.30f, cy - h * 0.05f)
-                lineTo(cx - w * 0.15f, cy - h * 0.35f)
-                lineTo(cx - w * 0.05f, cy - h * 0.15f)
-                lineTo(cx, cy - h * 0.40f)
-                lineTo(cx + w * 0.05f, cy - h * 0.15f)
-                lineTo(cx + w * 0.15f, cy - h * 0.35f)
-                lineTo(cx + w * 0.30f, cy - h * 0.05f)
-                lineTo(cx + w * 0.35f, cy + h * 0.42f)
-                close()
-            }
-            'k' -> {
-                // Raja: salib + badan
-                moveTo(cx - w * 0.05f, cy - h * 0.48f)
-                lineTo(cx + w * 0.05f, cy - h * 0.48f)
-                lineTo(cx + w * 0.05f, cy - h * 0.38f)
-                lineTo(cx + w * 0.15f, cy - h * 0.38f)
-                lineTo(cx + w * 0.15f, cy - h * 0.28f)
-                lineTo(cx + w * 0.05f, cy - h * 0.28f)
-                lineTo(cx + w * 0.05f, cy - h * 0.18f)
-                lineTo(cx - w * 0.05f, cy - h * 0.18f)
-                lineTo(cx - w * 0.05f, cy - h * 0.28f)
-                lineTo(cx - w * 0.15f, cy - h * 0.28f)
-                lineTo(cx - w * 0.15f, cy - h * 0.38f)
-                lineTo(cx - w * 0.05f, cy - h * 0.38f)
-                close()
-                moveTo(cx - w * 0.30f, cy + h * 0.42f)
-                lineTo(cx - w * 0.25f, cy - h * 0.05f)
-                lineTo(cx - w * 0.10f, cy - h * 0.15f)
-                lineTo(cx + w * 0.10f, cy - h * 0.15f)
-                lineTo(cx + w * 0.25f, cy - h * 0.05f)
-                lineTo(cx + w * 0.30f, cy + h * 0.42f)
-                close()
-            }
-        }
-    }
-
-    drawPath(body, fill)
-    drawPath(body, outline, style = Stroke(width = strokeW))
 }
