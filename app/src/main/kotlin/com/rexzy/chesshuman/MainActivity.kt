@@ -25,6 +25,7 @@ import com.github.bhlangonijr.chesslib.Board
 import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
 import com.github.bhlangonijr.chesslib.move.MoveGenerator
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,6 +69,8 @@ fun GameScreen() {
     var selected by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var legalTargets by remember { mutableStateOf<List<Pair<Int, Int>>>(emptyList()) }
     var history by remember { mutableStateOf<List<HistoryEntry>>(emptyList()) }
+    var engineThinking by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     fun refreshLegal(from: Pair<Int, Int>?) {
         if (from == null) { legalTargets = emptyList(); return }
@@ -76,12 +79,9 @@ fun GameScreen() {
         val moves = try {
             MoveGenerator.generateLegalMoves(board).filter { it.from == fromSquare }
         } catch (e: Exception) { emptyList() }
-        
         legalTargets = moves.mapNotNull { mv ->
-            val toName = mv.to.name // Formatnya HURUF BESAR: "E4"
-            val file = toName[0].lowercaseChar() // 'e'
-            val rank = toName[1].digitToInt() // 4
-            (8 - rank) to (file - 'a')
+            val toName = mv.to.name
+            (8 - toName[1].digitToInt()) to (toName[0].lowercaseChar() - 'a')
         }
     }
 
@@ -94,10 +94,51 @@ fun GameScreen() {
             board.doMove(candidate)
             history = history + HistoryEntry(fenBefore, candidate.toString())
         } catch (e: Exception) {
-            // abaikan
         } finally {
             selected = null
             legalTargets = emptyList()
+        }
+    }
+
+    fun parseUci(uci: String): Pair<Pair<Int, Int>, Pair<Int, Int>>? {
+        if (uci.length < 4) return null
+        return try {
+            val fromFile = uci[0] - 'a'
+            val fromRank = uci[1].digitToInt()
+            val toFile = uci[2] - 'a'
+            val toRank = uci[3].digitToInt()
+            ((8 - fromRank) to fromFile) to ((8 - toRank) to toFile)
+        } catch (e: Exception) { null }
+    }
+
+    fun requestEngineMove() {
+        if (engineThinking) return
+        engineThinking = true
+        scope.launch {
+            try {
+                val fen = board.fen
+                val candidates = HumanEngine.topMoves(fen, depth = 15, multipv = 3)
+                if (candidates.isEmpty()) return@launch
+                HumanEngine.humanDelay()
+                val bestCp = candidates.maxOf { it.cp }
+                val chosen = HumanEngine.maybeControlledBlunder(candidates, bestCp)
+                if (chosen != null) {
+                    val parsed = parseUci(chosen)
+                    if (parsed != null) {
+                        val (from, to) = parsed
+                        val fromSq = Square.valueOf(squareName(from.first, from.second))
+                        val toSq = Square.valueOf(squareName(to.first, to.second))
+                        val move = board.legalMoves().firstOrNull { it.from == fromSq && it.to == toSq }
+                        if (move != null) {
+                            val fenBefore = board.fen
+                            board.doMove(move)
+                            history = history + HistoryEntry(fenBefore, move.toString())
+                        }
+                    }
+                }
+            } finally {
+                engineThinking = false
+            }
         }
     }
 
@@ -112,6 +153,7 @@ fun GameScreen() {
             selected = selected,
             legalTargets = legalTargets,
             onTap = { r, c ->
+                if (engineThinking) return@ChessBoard
                 val piece = fenToBoard(board.fen)[r][c]
                 if (piece == ' ') {
                     selected?.let { from ->
@@ -140,13 +182,16 @@ fun GameScreen() {
             Button(onClick = {
                 board = Board(); selected = null; legalTargets = emptyList(); history = emptyList()
             }) { Text("Reset") }
-            Button(enabled = history.isNotEmpty(), onClick = {
+            Button(enabled = history.isNotEmpty() && !engineThinking, onClick = {
                 val last = history.last()
                 history = history.dropLast(1)
                 board = Board()
                 board.loadFromFen(last.fen)
                 selected = null; legalTargets = emptyList()
             }) { Text("Undo") }
+            Button(enabled = !engineThinking, onClick = { requestEngineMove() }) {
+                Text(if (engineThinking) "..." else "Engine")
+            }
         }
     }
 }
@@ -205,17 +250,16 @@ fun ChessBoard(
                 val hasPiece = board[r][c] != ' '
                 val centerX = sc * cell + cell / 2f
                 val centerY = sr * cell + cell / 2f
-                
                 if (hasPiece) {
                     drawCircle(
-                        color = Color(0x44000000), 
+                        color = Color(0x44000000),
                         radius = cell * 0.45f,
                         center = Offset(centerX, centerY),
                         style = Stroke(width = cell * 0.08f)
                     )
                 } else {
                     drawCircle(
-                        color = Color(0x44000000), 
+                        color = Color(0x44000000),
                         radius = cell * 0.15f,
                         center = Offset(centerX, centerY)
                     )
