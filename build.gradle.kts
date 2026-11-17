@@ -1,12 +1,5 @@
 plugins {
-    kotlin("jvm") version "2.0.21"
-    application
-}
-
-repositories { mavenCentral() }
-
-kotlin { jvmToolchain(17) }
-
-application {
-    mainClass.set("MainKt")
+    id("com.android.application") version "8.7.3" apply false
+    kotlin("android") version "2.0.21" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
 }
