@@ -42,4 +42,5 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
     implementation("fr.axl-lvy:stockfish-multiplatform-lite:0.1.0")
+    implementation("com.github.bhlangonijr:chesslib:1.3.3")
 }
