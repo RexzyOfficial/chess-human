@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
@@ -75,17 +76,19 @@ fun GameScreen() {
         val moves = try {
             MoveGenerator.generateLegalMoves(board).filter { it.from == fromSquare }
         } catch (e: Exception) { emptyList() }
+        
         legalTargets = moves.mapNotNull { mv ->
-            val to = mv.to.name
-            (8 - to[1].digitToInt()) to (to[0] - 'a')
+            val toName = mv.to.name // Formatnya HURUF BESAR: "E4"
+            val file = toName[0].lowercaseChar() // 'e'
+            val rank = toName[1].digitToInt() // 4
+            (8 - rank) to (file - 'a')
         }
     }
 
     fun attemptMove(from: Pair<Int, Int>, to: Pair<Int, Int>) {
         try {
             val fromSq = Square.valueOf(squareName(from.first, from.second))
-            // FIX: paksa huruf besar untuk kotak tujuan
-            val toSq = Square.valueOf(squareName(to.first, to.second).uppercase())
+            val toSq = Square.valueOf(squareName(to.first, to.second))
             val candidate = board.legalMoves().firstOrNull { it.from == fromSq && it.to == toSq } ?: return
             val fenBefore = board.fen
             board.doMove(candidate)
@@ -188,7 +191,6 @@ fun ChessBoard(
             isAntiAlias = true
         }
 
-        // 1. Gambar papan
         for (sr in 0..7) for (sc in 0..7) {
             val (r, c) = if (flipped) (7 - sr) to (7 - sc) else sr to sc
             val isLight = (r + c) % 2 == 0
@@ -197,7 +199,6 @@ fun ChessBoard(
             drawRect(color, Offset(sc * cell, sr * cell), Size(cell, cell))
         }
 
-        // 2. Gambar titik-titik / cincin untuk langkah legal
         for (sr in 0..7) for (sc in 0..7) {
             val (r, c) = if (flipped) (7 - sr) to (7 - sc) else sr to sc
             if (legalTargets.contains(r to c)) {
@@ -206,17 +207,15 @@ fun ChessBoard(
                 val centerY = sr * cell + cell / 2f
                 
                 if (hasPiece) {
-                    // Kalau ada bidak musuh, gambar cincin (ring)
                     drawCircle(
-                        color = Color(0x66000000), // hitam transparan
+                        color = Color(0x44000000), 
                         radius = cell * 0.45f,
                         center = Offset(centerX, centerY),
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = cell * 0.08f)
+                        style = Stroke(width = cell * 0.08f)
                     )
                 } else {
-                    // Kalau kosong, gambar titik (dot)
                     drawCircle(
-                        color = Color(0x66000000), // hitam transparan
+                        color = Color(0x44000000), 
                         radius = cell * 0.15f,
                         center = Offset(centerX, centerY)
                     )
@@ -224,7 +223,6 @@ fun ChessBoard(
             }
         }
 
-        // 3. Gambar bidak
         for (sr in 0..7) for (sc in 0..7) {
             val (r, c) = if (flipped) (7 - sr) to (7 - sc) else sr to sc
             val piece = board[r][c]
@@ -235,22 +233,14 @@ fun ChessBoard(
                 paint.style = Paint.Style.STROKE
                 paint.strokeWidth = cell * 0.06f
                 paint.color = if (isWhite) 0xFF000000.toInt() else 0xFF888888.toInt()
-
-                drawIntoCanvas { canvas ->
-                    val native = canvas.nativeCanvas
-                    val x = sc * cell + cell / 2f
-                    val y = sr * cell + cell / 2f - (paint.ascent() + paint.descent()) / 2f
-                    native.drawText(glyph, x, y, paint)
+                drawIntoCanvas {
+                    it.nativeCanvas.drawText(glyph, sc * cell + cell / 2f, sr * cell + cell / 2f - (paint.ascent() + paint.descent()) / 2f, paint)
                 }
 
                 paint.style = Paint.Style.FILL
                 paint.color = if (isWhite) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()
-
-                drawIntoCanvas { canvas ->
-                    val native = canvas.nativeCanvas
-                    val x = sc * cell + cell / 2f
-                    val y = sr * cell + cell / 2f - (paint.ascent() + paint.descent()) / 2f
-                    native.drawText(glyph, x, y, paint)
+                drawIntoCanvas {
+                    it.nativeCanvas.drawText(glyph, sc * cell + cell / 2f, sr * cell + cell / 2f - (paint.ascent() + paint.descent()) / 2f, paint)
                 }
             }
         }
