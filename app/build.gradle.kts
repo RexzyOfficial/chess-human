@@ -37,5 +37,5 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
-    implementation("fr.axl-lvy:stockfish-multiplatform-lite:0.1.1")
+    implementation("fr.axl-lvy:stockfish-multiplatform-lite:0.1.0")
 }
