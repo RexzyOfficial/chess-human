@@ -1,6 +1,6 @@
 package com.rexzy.chesshuman
 
-import fr.axl_lvy.stockfish.getStockfish
+import fr.axl_lvy.stockfish_multiplatform.getStockfish
 import kotlinx.coroutines.delay
 import kotlin.random.Random
 
@@ -8,22 +8,21 @@ data class Candidate(val uci: String, val cp: Int)
 
 object HumanEngine {
 
-    suspend fun topMoves(fen: String, depth: Int = 15, multipv: Int = 3): List<Candidate> {
-        return try {
-            val engine = getStockfish()
-            engine.setPosition(fen = fen)
-            val result = engine.search(depth = depth, multipv = multipv)
-            // Asumsi: result.lines berisi daftar move + eval.
-            // Kalau nama propertinya beda, compile akan gagal di sini — sesuaikan.
-            result.lines.map { line ->
-                Candidate(
-                    uci = line.move,
-                    cp = line.scoreCp ?: 0
-                )
+    suspend fun topMoves(fen: String, depths: List<Int> = listOf(10, 14, 18)): List<Candidate> {
+        val engine = try { getStockfish() } catch (e: Exception) { return emptyList() }
+        val results = mutableListOf<Candidate>()
+        for (d in depths) {
+            try {
+                engine.setPosition(fen)
+                val r = engine.search(depth = d)
+                val move = r.bestMove
+                if (move.isNotBlank() && results.none { it.uci == move }) {
+                    results += Candidate(uci = move, cp = d * 10)
+                }
+            } catch (e: Exception) {
             }
-        } catch (e: Exception) {
-            emptyList()
         }
+        return results
     }
 
     fun weightFor(diffCp: Int): Double = when {

@@ -117,7 +117,7 @@ fun GameScreen() {
         scope.launch {
             try {
                 val fen = board.fen
-                val candidates = HumanEngine.topMoves(fen, depth = 15, multipv = 3)
+                val candidates = HumanEngine.topMoves(fen)
                 if (candidates.isEmpty()) return@launch
                 HumanEngine.humanDelay()
                 val bestCp = candidates.maxOf { it.cp }
