@@ -16,6 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -26,6 +28,10 @@ import com.github.bhlangonijr.chesslib.Side
 import com.github.bhlangonijr.chesslib.Square
 import com.github.bhlangonijr.chesslib.move.MoveGenerator
 import kotlinx.coroutines.launch
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,7 +75,8 @@ fun GameScreen() {
     var selected by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var legalTargets by remember { mutableStateOf<List<Pair<Int, Int>>>(emptyList()) }
     var history by remember { mutableStateOf<List<HistoryEntry>>(emptyList()) }
-    var engineThinking by remember { mutableStateOf(false) }
+    var hints by remember { mutableStateOf<List<EngineHint>>(emptyList()) }
+    var hintLoading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun refreshLegal(from: Pair<Int, Int>?) {
@@ -93,6 +100,7 @@ fun GameScreen() {
             val fenBefore = board.fen
             board.doMove(candidate)
             history = history + HistoryEntry(fenBefore, candidate.toString())
+            hints = emptyList() // panah lama hilang setelah langkah baru
         } catch (e: Exception) {
         } finally {
             selected = null
@@ -100,44 +108,18 @@ fun GameScreen() {
         }
     }
 
-    fun parseUci(uci: String): Pair<Pair<Int, Int>, Pair<Int, Int>>? {
-        if (uci.length < 4) return null
-        return try {
-            val fromFile = uci[0] - 'a'
-            val fromRank = uci[1].digitToInt()
-            val toFile = uci[2] - 'a'
-            val toRank = uci[3].digitToInt()
-            ((8 - fromRank) to fromFile) to ((8 - toRank) to toFile)
-        } catch (e: Exception) { null }
-    }
-
-    fun requestEngineMove() {
-        if (engineThinking) return
-        engineThinking = true
+    fun toggleHints() {
+        if (hints.isNotEmpty()) {
+            hints = emptyList()
+            return
+        }
+        if (hintLoading) return
+        hintLoading = true
         scope.launch {
             try {
-                val fen = board.fen
-                val candidates = HumanEngine.topMoves(fen)
-                if (candidates.isEmpty()) return@launch
-                HumanEngine.humanDelay()
-                val bestCp = candidates.maxOf { it.cp }
-                val chosen = HumanEngine.maybeControlledBlunder(candidates, bestCp)
-                if (chosen != null) {
-                    val parsed = parseUci(chosen)
-                    if (parsed != null) {
-                        val (from, to) = parsed
-                        val fromSq = Square.valueOf(squareName(from.first, from.second))
-                        val toSq = Square.valueOf(squareName(to.first, to.second))
-                        val move = board.legalMoves().firstOrNull { it.from == fromSq && it.to == toSq }
-                        if (move != null) {
-                            val fenBefore = board.fen
-                            board.doMove(move)
-                            history = history + HistoryEntry(fenBefore, move.toString())
-                        }
-                    }
-                }
+                hints = HumanEngine.findHints(board.fen)
             } finally {
-                engineThinking = false
+                hintLoading = false
             }
         }
     }
@@ -152,8 +134,8 @@ fun GameScreen() {
             flipped = flipped,
             selected = selected,
             legalTargets = legalTargets,
+            hints = hints,
             onTap = { r, c ->
-                if (engineThinking) return@ChessBoard
                 val piece = fenToBoard(board.fen)[r][c]
                 if (piece == ' ') {
                     selected?.let { from ->
@@ -180,17 +162,23 @@ fun GameScreen() {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { flipped = !flipped }) { Text("Flip") }
             Button(onClick = {
-                board = Board(); selected = null; legalTargets = emptyList(); history = emptyList()
+                board = Board(); selected = null; legalTargets = emptyList(); history = emptyList(); hints = emptyList()
             }) { Text("Reset") }
-            Button(enabled = history.isNotEmpty() && !engineThinking, onClick = {
+            Button(enabled = history.isNotEmpty(), onClick = {
                 val last = history.last()
                 history = history.dropLast(1)
                 board = Board()
                 board.loadFromFen(last.fen)
-                selected = null; legalTargets = emptyList()
+                selected = null; legalTargets = emptyList(); hints = emptyList()
             }) { Text("Undo") }
-            Button(enabled = !engineThinking, onClick = { requestEngineMove() }) {
-                Text(if (engineThinking) "..." else "Engine")
+            Button(enabled = !hintLoading, onClick = { toggleHints() }) {
+                Text(
+                    when {
+                        hintLoading -> "..."
+                        hints.isNotEmpty() -> "Hide Hints"
+                        else -> "Show Hints"
+                    }
+                )
             }
         }
     }
@@ -206,6 +194,7 @@ fun ChessBoard(
     flipped: Boolean,
     selected: Pair<Int, Int>?,
     legalTargets: List<Pair<Int, Int>>,
+    hints: List<EngineHint>,
     onTap: (Int, Int) -> Unit
 ) {
     val board = fenToBoard(fen)
@@ -236,6 +225,7 @@ fun ChessBoard(
             isAntiAlias = true
         }
 
+        // 1. Papan
         for (sr in 0..7) for (sc in 0..7) {
             val (r, c) = if (flipped) (7 - sr) to (7 - sc) else sr to sc
             val isLight = (r + c) % 2 == 0
@@ -244,29 +234,37 @@ fun ChessBoard(
             drawRect(color, Offset(sc * cell, sr * cell), Size(cell, cell))
         }
 
+        // 2. Dot / ring target legal
         for (sr in 0..7) for (sc in 0..7) {
             val (r, c) = if (flipped) (7 - sr) to (7 - sc) else sr to sc
             if (legalTargets.contains(r to c)) {
                 val hasPiece = board[r][c] != ' '
-                val centerX = sc * cell + cell / 2f
-                val centerY = sr * cell + cell / 2f
+                val cx = sc * cell + cell / 2f
+                val cy = sr * cell + cell / 2f
                 if (hasPiece) {
-                    drawCircle(
-                        color = Color(0x44000000),
-                        radius = cell * 0.45f,
-                        center = Offset(centerX, centerY),
-                        style = Stroke(width = cell * 0.08f)
-                    )
+                    drawCircle(Color(0x44000000), cell * 0.45f, Offset(cx, cy), style = Stroke(width = cell * 0.08f))
                 } else {
-                    drawCircle(
-                        color = Color(0x44000000),
-                        radius = cell * 0.15f,
-                        center = Offset(centerX, centerY)
-                    )
+                    drawCircle(Color(0x44000000), cell * 0.15f, Offset(cx, cy))
                 }
             }
         }
 
+        // 3. Panah hint (di bawah bidak supaya bidak tetap terlihat)
+        for (h in hints) {
+            val (sr1, sc1) = toScreen(h.fromRow, h.fromCol, flipped)
+            val (sr2, sc2) = toScreen(h.toRow, h.toCol, flipped)
+            val start = Offset(sc1 * cell + cell / 2f, sr1 * cell + cell / 2f)
+            val end = Offset(sc2 * cell + cell / 2f, sr2 * cell + cell / 2f)
+            val color = when (h.rank) {
+                0 -> Color(0xAA00AAFF) // biru pekat
+                1 -> Color(0x8800CC66) // hijau
+                else -> Color(0x77FF8800) // oranye
+            }
+            val thickness = if (h.rank == 0) cell * 0.14f else cell * 0.10f
+            drawArrow(start, end, color, thickness, cell)
+        }
+
+        // 4. Bidak
         for (sr in 0..7) for (sc in 0..7) {
             val (r, c) = if (flipped) (7 - sr) to (7 - sc) else sr to sc
             val piece = board[r][c]
@@ -289,4 +287,56 @@ fun ChessBoard(
             }
         }
     }
+}
+
+fun toScreen(r: Int, c: Int, flipped: Boolean): Pair<Int, Int> {
+    return if (flipped) (7 - r) to (7 - c) else r to c
+}
+
+fun androidx.compose.ui.graphics.drawscope.DrawScope.drawArrow(
+    start: Offset,
+    end: Offset,
+    color: Color,
+    thickness: Float,
+    cell: Float
+) {
+    val dx = end.x - start.x
+    val dy = end.y - start.y
+    val len = sqrt(dx * dx + dy * dy)
+    if (len < 1f) return
+    val ux = dx / len
+    val uy = dy / len
+
+    // Potong ujung panah supaya tidak menutupi pusat bidak tujuan sepenuhnya
+    val headLen = cell * 0.35f
+    val shaftEnd = Offset(end.x - ux * headLen, end.y - uy * headLen)
+
+    drawLine(
+        color = color,
+        start = start,
+        end = shaftEnd,
+        strokeWidth = thickness,
+        cap = StrokeCap.Round
+    )
+
+    // Segitiga ujung panah
+    val perpX = -uy
+    val perpY = ux
+    val headWidth = cell * 0.22f
+    val tip = end
+    val left = Offset(
+        end.x - ux * headLen + perpX * headWidth,
+        end.y - uy * headLen + perpY * headWidth
+    )
+    val right = Offset(
+        end.x - ux * headLen - perpX * headWidth,
+        end.y - uy * headLen - perpY * headWidth
+    )
+    val path = Path().apply {
+        moveTo(tip.x, tip.y)
+        lineTo(left.x, left.y)
+        lineTo(right.x, right.y)
+        close()
+    }
+    drawPath(path, color)
 }

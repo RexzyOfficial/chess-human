@@ -1,67 +1,44 @@
 package com.rexzy.chesshuman
 
 import fr.axl_lvy.stockfish_multiplatform.getStockfish
-import kotlinx.coroutines.delay
-import kotlin.random.Random
 
-data class Candidate(val uci: String, val cp: Int)
+data class EngineHint(
+    val fromRow: Int,
+    val fromCol: Int,
+    val toRow: Int,
+    val toCol: Int,
+    val rank: Int // 0 = terbaik, 1 = kedua, 2 = ketiga
+)
 
 object HumanEngine {
 
-    suspend fun topMoves(fen: String, depths: List<Int> = listOf(10, 14, 18)): List<Candidate> {
+    suspend fun findHints(fen: String): List<EngineHint> {
         val engine = try { getStockfish() } catch (e: Exception) { return emptyList() }
-        val results = mutableListOf<Candidate>()
-        for (d in depths) {
+        val seen = mutableSetOf<String>()
+        val hints = mutableListOf<EngineHint>()
+        val depths = listOf(18, 14, 10)
+
+        for ((rank, d) in depths.withIndex()) {
             try {
                 engine.setPosition(fen)
                 val r = engine.search(depth = d)
                 val move = r.bestMove
-                if (move.isNotBlank() && results.none { it.uci == move }) {
-                    results += Candidate(uci = move, cp = d * 10)
+                if (move.length >= 4 && seen.add(move)) {
+                    val fromFile = move[0] - 'a'
+                    val fromRank = move[1].digitToInt()
+                    val toFile = move[2] - 'a'
+                    val toRank = move[3].digitToInt()
+                    hints += EngineHint(
+                        fromRow = 8 - fromRank,
+                        fromCol = fromFile,
+                        toRow = 8 - toRank,
+                        toCol = toFile,
+                        rank = rank
+                    )
                 }
             } catch (e: Exception) {
             }
         }
-        return results
-    }
-
-    fun weightFor(diffCp: Int): Double = when {
-        diffCp <= 10 -> 1.0
-        diffCp <= 30 -> 0.55
-        diffCp <= 60 -> 0.18
-        diffCp <= 100 -> 0.05
-        else -> 0.01
-    }
-
-    fun pickHuman(candidates: List<Candidate>): String? {
-        if (candidates.isEmpty()) return null
-        if (candidates.size == 1) return candidates.first().uci
-
-        val best = candidates.maxOf { it.cp }
-        val weights = candidates.map { weightFor(best - it.cp) }
-        val total = weights.sum()
-        if (total <= 0.0) return candidates.first().uci
-
-        var roll = Random.nextDouble() * total
-        for (i in candidates.indices) {
-            roll -= weights[i]
-            if (roll <= 0.0) return candidates[i].uci
-        }
-        return candidates.first().uci
-    }
-
-    fun maybeControlledBlunder(candidates: List<Candidate>, evalCp: Int): String? {
-        if (candidates.isEmpty()) return null
-        if (evalCp < 300) return pickHuman(candidates)
-        if (Random.nextDouble() > 0.05) return pickHuman(candidates)
-
-        val best = candidates.maxOf { it.cp }
-        val pool = candidates.filter { best - it.cp <= 80 }
-        return pool.minByOrNull { it.cp }?.uci ?: candidates.first().uci
-    }
-
-    suspend fun humanDelay(baseMs: Long = 1200) {
-        val jitter = Random.nextLong(-400, 1300)
-        delay((baseMs + jitter).coerceIn(800, 2500))
+        return hints.sortedBy { it.rank }
     }
 }
