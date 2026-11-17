@@ -84,13 +84,14 @@ fun GameScreen() {
     fun attemptMove(from: Pair<Int, Int>, to: Pair<Int, Int>) {
         try {
             val fromSq = Square.valueOf(squareName(from.first, from.second))
-            val toSq = Square.valueOf(squareName(to.first, to.second))
+            // FIX: paksa huruf besar untuk kotak tujuan
+            val toSq = Square.valueOf(squareName(to.first, to.second).uppercase())
             val candidate = board.legalMoves().firstOrNull { it.from == fromSq && it.to == toSq } ?: return
             val fenBefore = board.fen
             board.doMove(candidate)
             history = history + HistoryEntry(fenBefore, candidate.toString())
         } catch (e: Exception) {
-            // abaikan langkah tidak valid, jangan crash
+            // abaikan
         } finally {
             selected = null
             legalTargets = emptyList()
@@ -148,7 +149,6 @@ fun GameScreen() {
 }
 
 fun squareName(r: Int, c: Int): String {
-    // chesslib pakai HURUF BESAR: E2, bukan e2
     return "${('A' + c)}${8 - r}"
 }
 
@@ -164,7 +164,6 @@ fun ChessBoard(
     val lightColor = Color(0xFFF0D9B5)
     val darkColor = Color(0xFFB58863)
     val selectColor = Color(0x6600A0FF)
-    val targetColor = Color(0x5500FF00)
     var boardSize by remember { mutableStateOf(Size.Zero) }
 
     Canvas(
@@ -189,15 +188,43 @@ fun ChessBoard(
             isAntiAlias = true
         }
 
+        // 1. Gambar papan
         for (sr in 0..7) for (sc in 0..7) {
             val (r, c) = if (flipped) (7 - sr) to (7 - sc) else sr to sc
             val isLight = (r + c) % 2 == 0
             var color = if (isLight) lightColor else darkColor
             if (selected == (r to c)) color = selectColor
-            else if (legalTargets.contains(r to c)) color = targetColor
             drawRect(color, Offset(sc * cell, sr * cell), Size(cell, cell))
         }
 
+        // 2. Gambar titik-titik / cincin untuk langkah legal
+        for (sr in 0..7) for (sc in 0..7) {
+            val (r, c) = if (flipped) (7 - sr) to (7 - sc) else sr to sc
+            if (legalTargets.contains(r to c)) {
+                val hasPiece = board[r][c] != ' '
+                val centerX = sc * cell + cell / 2f
+                val centerY = sr * cell + cell / 2f
+                
+                if (hasPiece) {
+                    // Kalau ada bidak musuh, gambar cincin (ring)
+                    drawCircle(
+                        color = Color(0x66000000), // hitam transparan
+                        radius = cell * 0.45f,
+                        center = Offset(centerX, centerY),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = cell * 0.08f)
+                    )
+                } else {
+                    // Kalau kosong, gambar titik (dot)
+                    drawCircle(
+                        color = Color(0x66000000), // hitam transparan
+                        radius = cell * 0.15f,
+                        center = Offset(centerX, centerY)
+                    )
+                }
+            }
+        }
+
+        // 3. Gambar bidak
         for (sr in 0..7) for (sc in 0..7) {
             val (r, c) = if (flipped) (7 - sr) to (7 - sc) else sr to sc
             val piece = board[r][c]
@@ -205,8 +232,6 @@ fun ChessBoard(
                 val glyph = PIECE_TO_CHAR[piece] ?: continue
                 val isWhite = piece.isUpperCase()
 
-                // Trik: gambar glyph dengan STROKE tebal dulu (outline),
-                // lalu FILL solid di atasnya. Glyph putih pun jadi punya isi.
                 paint.style = Paint.Style.STROKE
                 paint.strokeWidth = cell * 0.06f
                 paint.color = if (isWhite) 0xFF000000.toInt() else 0xFF888888.toInt()
